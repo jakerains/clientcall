@@ -1,113 +1,84 @@
 import { DynamoDBClient, CreateTableCommand, DescribeTableCommand } from '@aws-sdk/client-dynamodb'
 import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand, ScanCommand, DeleteCommand, GetCommand } from '@aws-sdk/lib-dynamodb'
 import { Appointment } from '@/types/appointment'
+import { getSecrets } from './secretsManager'
 
 // Initialize DynamoDB client lazily
-let client: DynamoDBClient | null = null;
-let docClient: DynamoDBDocumentClient | null = null;
+let client: DynamoDBClient | null = null
+let docClient: DynamoDBDocumentClient | null = null
 
-function getClient() {
-  if (!client) {
-    // Validate required environment variables
-    const requiredEnvVars = [
-      'AWS_ACCESS_KEY_ID',
-      'AWS_SECRET_ACCESS_KEY',
-      'AWS_REGION',
-      'DYNAMODB_TABLE_NAME'
-    ]
-
-    requiredEnvVars.forEach(envVar => {
-      if (!process.env[envVar]) {
-        throw new Error(`Missing required environment variable: ${envVar}`)
-      }
-    })
-
+async function getClient() {
+  if (!client || !docClient) {
+    // Get credentials from Secrets Manager
+    const secrets = await getSecrets()
+    
     client = new DynamoDBClient({
-      region: process.env.AWS_REGION,
+      region: secrets.AWS_REGION,
       credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
+        accessKeyId: secrets.AWS_ACCESS_KEY_ID,
+        secretAccessKey: secrets.AWS_SECRET_ACCESS_KEY
       }
     })
     docClient = DynamoDBDocumentClient.from(client)
   }
   
-  // Assert that the clients are initialized
-  if (!client || !docClient) {
-    throw new Error('Failed to initialize DynamoDB clients')
-  }
-  
   return { client, docClient }
 }
 
-const TableName = process.env.DYNAMODB_TABLE_NAME!
+// Get table name from Secrets Manager
+async function getTableName() {
+  const secrets = await getSecrets()
+  return secrets.DYNAMODB_TABLE_NAME
+}
 
-// Function to ensure table exists
-export async function ensureTableExists() {
-  const { client } = getClient()
+export async function ensureTableExists(): Promise<void> {
+  const { client } = await getClient()
+  const TableName = await getTableName()
+  
   try {
-    // Try to describe the table first
-    const describeCommand = new DescribeTableCommand({
-      TableName
-    })
+    // Check if table exists
+    await client.send(new DescribeTableCommand({ TableName }))
+    console.log('Table exists:', TableName)
+  } catch (error) {
+    if ((error as any).name === 'ResourceNotFoundException') {
+      console.log('Table not found, creating:', TableName)
+      
+      // Create the table
+      const createTableCommand = new CreateTableCommand({
+        TableName,
+        AttributeDefinitions: [
+          { AttributeName: 'pk', AttributeType: 'S' },
+          { AttributeName: 'sk', AttributeType: 'S' },
+        ],
+        KeySchema: [
+          { AttributeName: 'pk', KeyType: 'HASH' },
+          { AttributeName: 'sk', KeyType: 'RANGE' },
+        ],
+        BillingMode: 'PAY_PER_REQUEST',
+      })
 
-    try {
-      await client.send(describeCommand)
-      console.log('Table exists:', TableName)
-      return true
-    } catch (error: any) {
-      // If table doesn't exist, create it
-      if (error.name === 'ResourceNotFoundException') {
-        console.log('Table does not exist, creating...')
-        const createCommand = new CreateTableCommand({
-          TableName,
-          AttributeDefinitions: [
-            { AttributeName: 'pk', AttributeType: 'S' },
-            { AttributeName: 'sk', AttributeType: 'S' },
-            { AttributeName: 'gsi1pk', AttributeType: 'S' },
-            { AttributeName: 'gsi1sk', AttributeType: 'S' }
-          ],
-          KeySchema: [
-            { AttributeName: 'pk', KeyType: 'HASH' },
-            { AttributeName: 'sk', KeyType: 'RANGE' }
-          ],
-          GlobalSecondaryIndexes: [
-            {
-              IndexName: 'gsi1',
-              KeySchema: [
-                { AttributeName: 'gsi1pk', KeyType: 'HASH' },
-                { AttributeName: 'gsi1sk', KeyType: 'RANGE' }
-              ],
-              Projection: {
-                ProjectionType: 'ALL'
-              },
-              ProvisionedThroughput: {
-                ReadCapacityUnits: 5,
-                WriteCapacityUnits: 5
-              }
-            }
-          ],
-          ProvisionedThroughput: {
-            ReadCapacityUnits: 5,
-            WriteCapacityUnits: 5
-          }
-        })
-
-        await client.send(createCommand)
-        console.log('Table created successfully')
-        return true
+      await client.send(createTableCommand)
+      console.log('Table created successfully')
+      
+      // Wait for table to be active
+      let tableActive = false
+      while (!tableActive) {
+        const { Table } = await client.send(new DescribeTableCommand({ TableName }))
+        tableActive = Table?.TableStatus === 'ACTIVE'
+        if (!tableActive) {
+          console.log('Waiting for table to be active...')
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
       }
+    } else {
       throw error
     }
-  } catch (error) {
-    console.error('Error ensuring table exists:', error)
-    throw error
   }
 }
 
 export async function createAppointment(appointment: Appointment): Promise<Appointment> {
   console.log('Creating appointment in DynamoDB:', appointment)
-  const { docClient } = getClient()
+  const { docClient } = await getClient()
   
   try {
     // Use existing id if provided, otherwise generate new one
@@ -116,7 +87,7 @@ export async function createAppointment(appointment: Appointment): Promise<Appoi
     
     // Check if appointment already exists
     const existingCommand = new QueryCommand({
-      TableName,
+      TableName: await getTableName(),
       KeyConditionExpression: 'pk = :pk AND sk = :sk',
       ExpressionAttributeValues: {
         ':pk': `APPOINTMENT#${newId}`,
@@ -165,7 +136,7 @@ export async function createAppointment(appointment: Appointment): Promise<Appoi
     }
 
     const command = new PutCommand({
-      TableName,
+      TableName: await getTableName(),
       Item: dbItem,
       // Add condition to prevent overwriting if item exists
       ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)'
@@ -180,7 +151,7 @@ export async function createAppointment(appointment: Appointment): Promise<Appoi
       console.log('Appointment already exists (condition check)')
       // Fetch and return the existing appointment
       const existingCommand = new QueryCommand({
-        TableName,
+        TableName: await getTableName(),
         KeyConditionExpression: 'pk = :pk AND sk = :sk',
         ExpressionAttributeValues: {
           ':pk': `APPOINTMENT#${appointment.id}`,
@@ -198,10 +169,10 @@ export async function createAppointment(appointment: Appointment): Promise<Appoi
 }
 
 export async function getAppointments(): Promise<Appointment[]> {
-  const { docClient } = getClient()
+  const { docClient } = await getClient()
   try {
     const command = new ScanCommand({
-      TableName,
+      TableName: await getTableName(),
       Limit: 100
     })
 
@@ -240,7 +211,7 @@ export async function getAppointments(): Promise<Appointment[]> {
 
 export async function updateAppointment(id: string, updates: any): Promise<void> {
   console.log('Updating appointment:', { id, updates })
-  const { docClient } = getClient()
+  const { docClient } = await getClient()
   
   try {
     // Build update expression dynamically based on provided updates
@@ -278,7 +249,7 @@ export async function updateAppointment(id: string, updates: any): Promise<void>
     for (const key of possibleKeys) {
       try {
         const getResult = await docClient.send(new GetCommand({
-          TableName,
+          TableName: await getTableName(),
           Key: key
         }))
         if (getResult.Item) {
@@ -298,7 +269,7 @@ export async function updateAppointment(id: string, updates: any): Promise<void>
 
     // Update using only the key combination that was found or the default
     const updateCommand = new UpdateCommand({
-      TableName,
+      TableName: await getTableName(),
       Key: existingRecord.keyUsed,
       UpdateExpression: `SET ${updateExpressions.join(', ')}`,
       ExpressionAttributeNames: expressionAttributeNames,
@@ -314,7 +285,7 @@ export async function updateAppointment(id: string, updates: any): Promise<void>
 }
 
 export async function deleteAppointment(id: string, clientName: string): Promise<void> {
-  const { docClient } = getClient()
+  const { docClient } = await getClient()
   try {
     // Clean the ID by removing any known prefixes
     const baseId = id
@@ -325,7 +296,7 @@ export async function deleteAppointment(id: string, clientName: string): Promise
     const deletePromises = [
       // Try with APPOINTMENT# prefix
       docClient.send(new DeleteCommand({
-        TableName,
+        TableName: await getTableName(),
         Key: {
           pk: `APPOINTMENT#${baseId}`,
           sk: `CLIENT#${clientName}`
@@ -333,7 +304,7 @@ export async function deleteAppointment(id: string, clientName: string): Promise
       })),
       // Try with APPT# prefix
       docClient.send(new DeleteCommand({
-        TableName,
+        TableName: await getTableName(),
         Key: {
           pk: `APPT#${baseId}`,
           sk: `CLIENT#${clientName}`
@@ -341,7 +312,7 @@ export async function deleteAppointment(id: string, clientName: string): Promise
       })),
       // Try without prefix
       docClient.send(new DeleteCommand({
-        TableName,
+        TableName: await getTableName(),
         Key: {
           pk: baseId,
           sk: `CLIENT#${clientName}`
@@ -349,7 +320,7 @@ export async function deleteAppointment(id: string, clientName: string): Promise
       })),
       // Try with just the raw ID and client name
       docClient.send(new DeleteCommand({
-        TableName,
+        TableName: await getTableName(),
         Key: {
           pk: baseId,
           sk: clientName
@@ -357,7 +328,7 @@ export async function deleteAppointment(id: string, clientName: string): Promise
       })),
       // Try with just the ID as both keys
       docClient.send(new DeleteCommand({
-        TableName,
+        TableName: await getTableName(),
         Key: {
           pk: baseId,
           sk: baseId

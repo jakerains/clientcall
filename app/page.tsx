@@ -1,6 +1,5 @@
 'use client'
 
-import { useState } from 'react'
 import { StatsSection } from "@/components/stats-section"
 import { AppointmentsTable } from "@/components/appointments-table"
 import { UploadSection } from "@/components/upload-section"
@@ -8,25 +7,54 @@ import { Header } from "@/components/header"
 import { Footer } from "@/components/footer"
 import { ClientDetailsSheet } from "@/components/client-details-sheet"
 import { Toaster } from "@/components/ui/toaster"
-import { SettingsPanel } from "@/components/settings-panel"
-import { BlandSettings } from "@/lib/blandApi"
+import { useConfig } from "@/hooks/useConfig"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Loader2 } from "lucide-react"
 
 export default function Page() {
-  const [blandSettings, setBlandSettings] = useState<BlandSettings>({
-    prompt: "Hello, this is a confirmation call for your appointment on {date}. Please press 1 to confirm or 2 to reschedule.",
-    voice: "female",
-    language: "en-US"
-  })
+  const { config, loading, error } = useConfig()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-background p-4">
+        <Alert variant="destructive">
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>
+            Failed to load application configuration: {error}
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  if (!config) {
+    return (
+      <div className="min-h-screen bg-background p-4">
+        <Alert variant="destructive">
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>
+            No configuration available. Please check your environment setup.
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-background">
-      <Header>
-        <SettingsPanel settings={blandSettings} onSettingsChange={setBlandSettings} />
-      </Header>
+      <Header />
       <main className="container mx-auto p-4 pb-24 space-y-6">
         <StatsSection />
         <UploadSection />
-        <AppointmentsTable blandSettings={blandSettings} />
+        <AppointmentsTable />
       </main>
       <Footer />
       <ClientDetailsSheet />
