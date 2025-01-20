@@ -41,11 +41,30 @@ export async function makeConfirmationCall(
   // Create the minimal request data with record ID
   const data = {
     phone_number: formattedPhone,
-    task: `Call to confirm medical appointment for ${appointment.patientName} with ${appointment.doctorName} on ${appointment.appointmentDate} at ${appointment.appointmentTime}. Introduce yourself as Alexa from ${appointment.doctorName}'s office. Ask if they can make the appointment. If yes, remind them to arrive 15 minutes early. If they need to reschedule, gather their preferred times.`,
-    model: "enhanced",
+    task: `Call to confirm a medical appointment. Follow these steps exactly:
+
+1. Start with: "Hi, this is Alexa calling from ${appointment.doctorName}'s office. May I please speak with ${appointment.patientName} or someone who can confirm medical appointments for them?"
+
+2. Wait for their response:
+   - If they confirm they are the patient or authorized: "Great, thank you for confirming. I'm calling about your appointment for [Speak the date naturally without the year, like: Wednesday, January 2nd at 3:00 PM] ${appointment.appointmentDate} at ${appointment.appointmentTime}. Would you like to confirm this appointment?"
+   - If they say the person is not available: "When would be a better time to reach ${appointment.patientName}?"
+   - If they are not authorized: "I'll try calling back at another time. Thank you."
+
+3. If appointment is confirmed:
+   - Say: "Perfect, thank you for confirming. Please arrive 15 minutes early. Have a great day!"
+
+4. If they want to cancel the appointment:
+   - Say: "I understand. I'll mark this appointment as cancelled. Thank you and have a nice day!"
+
+5. If they can't make the appointment and want to reschedule:
+   - Say: "I understand. Is there a better day or time that generally works for you?"
+   - After they respond: "Thank you. Someone from our office will follow up soon to reschedule. Have a nice day!"
+
+Always maintain a professional and friendly tone. When speaking the date and time, say it naturally WITHOUT the year, like "Wednesday, January 2nd at 3:00 PM".`,
+    model: "turbo",
     language: "en",
     voice: "Alexa",
-    max_duration: 1,
+    max_duration: 2,
     wait_for_greeting: true,
     amd: false,
     voicemail_message: `Hello, this is a call from ${appointment.doctorName}'s office regarding an appointment for ${appointment.patientName}. Please call us back to confirm your appointment.`,
@@ -141,15 +160,15 @@ export async function analyzeCallResult(callId: string, settings: BlandSettings)
     goal: "Analyze appointment confirmation call results and extract key information about the appointment status, rescheduling preferences, and any concerns or questions.",
     questions: [
       ["Did the patient confirm the appointment?", "boolean"],
+      ["Did the patient request to cancel the appointment (without rescheduling)?", "boolean"],
       ["Does the patient need to reschedule?", "boolean"],
       ["What days and times work better for the patient if rescheduling?", "string"],
-      ["What was the reason for rescheduling, if any?", "string"],
+      ["What was the reason for cancelling or rescheduling, if any?", "string"],
       ["Were there any specific concerns or questions mentioned?", "string"],
       ["Did they need directions to the office?", "boolean"],
       ["Did they confirm their contact information?", "boolean"],
       ["What was the overall sentiment of the call?", "string"],
-      ["Were there any special accommodations requested?", "string"],
-      ["Did they mention any health concerns?", "string"]
+      ["Were there any special accommodations requested?", "string"]
     ]
   }
 
@@ -172,15 +191,15 @@ export async function analyzeCallResult(callId: string, settings: BlandSettings)
     // Process the analysis results
     const [
       confirmed,
+      requestedCancel,
       needsReschedule,
       reschedulePreference,
-      rescheduleReason,
+      cancelReason,
       concerns,
       needsDirections,
       confirmedContact,
       sentiment,
-      accommodations,
-      healthConcerns
+      accommodations
     ] = result.answers
 
     // Determine the new status
@@ -189,24 +208,28 @@ export async function analyzeCallResult(callId: string, settings: BlandSettings)
 
     if (confirmed) {
       newStatus = 'confirmed'
-      notes.push('✅ Patient confirmed appointment')
+      notes.push('Appointment was confirmed')
+    } else if (requestedCancel) {
+      newStatus = 'cancelled'
+      notes.push('Appointment was cancelled')
+      if (cancelReason) notes.push(cancelReason)
     } else if (needsReschedule) {
       newStatus = 'needs_reschedule'
-      notes.push('🔄 Patient needs to reschedule')
-      if (reschedulePreference) notes.push(`📅 Preferred time: ${reschedulePreference}`)
-      if (rescheduleReason) notes.push(`📝 Reason: ${rescheduleReason}`)
+      notes.push('Appointment needs to be rescheduled')
+      if (reschedulePreference) notes.push(`Preferred time: ${reschedulePreference}`)
+      if (cancelReason) notes.push(cancelReason)
     }
 
-    // Add other relevant information to notes
-    if (concerns) notes.push(`❗ Concerns: ${concerns}`)
-    if (needsDirections) notes.push('🗺️ Needs directions to office')
-    if (accommodations) notes.push(`⚡ Special needs: ${accommodations}`)
-    if (healthConcerns) notes.push(`🏥 Health concerns: ${healthConcerns}`)
-    if (sentiment) notes.push(`💭 Call sentiment: ${sentiment}`)
+    // Create a single summary from the notes
+    const summary = notes.join('. ')
 
     return {
       status: newStatus,
-      notes,
+      notes: [{
+        timestamp: new Date().toISOString(),
+        type: 'summary',
+        content: summary
+      }],
       analysis: result.answers,
       raw: result
     }

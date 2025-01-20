@@ -17,15 +17,18 @@ import { AppointmentCaller } from "@/components/appointment-caller"
 import { useState } from 'react'
 import { analyzeCallResult } from '@/lib/blandApi'
 import { ClientDetailsSheet } from "@/components/client-details-sheet"
+import React from 'react'
 
 // Status indicators mapping
 const statusIndicators = {
   confirmed: '✅',
   cancelled: '❌',
   pending: '⏳',
-  rescheduled: '🔄',
   completed: '✨',
-  noshow: '⚠️',
+  voicemail: '📞',
+  needs_reschedule: '🔄',
+  follow_up_needed: '❓',
+  calling: '📱'
 }
 
 // Status color classes
@@ -33,9 +36,11 @@ const statusColors = {
   confirmed: 'text-green-600 bg-green-50 border-green-200',
   cancelled: 'text-red-600 bg-red-50 border-red-200',
   pending: 'text-yellow-600 bg-yellow-50 border-yellow-200',
-  rescheduled: 'text-blue-600 bg-blue-50 border-blue-200',
   completed: 'text-gray-600 bg-gray-50 border-gray-200',
-  noshow: 'text-orange-600 bg-orange-50 border-orange-200',
+  voicemail: 'text-blue-600 bg-blue-50 border-blue-200',
+  needs_reschedule: 'text-orange-600 bg-orange-50 border-orange-200',
+  follow_up_needed: 'text-purple-600 bg-purple-50 border-purple-200',
+  calling: 'text-cyan-600 bg-cyan-50 border-cyan-200'
 }
 
 export function AppointmentsTable() {
@@ -43,6 +48,52 @@ export function AppointmentsTable() {
   const { toast } = useToast()
   const [isDeleting, setIsDeleting] = useState(false)
   const [analyzingAppointments, setAnalyzingAppointments] = useState<Set<string>>(new Set())
+  const [sortConfig, setSortConfig] = useState<{
+    key: 'clientName' | 'appointmentDate' | 'status' | null,
+    direction: 'asc' | 'desc'
+  }>({ key: null, direction: 'asc' })
+
+  const sortedAppointments = React.useMemo(() => {
+    if (!sortConfig.key) return appointments
+
+    return [...appointments].sort((a, b) => {
+      if (sortConfig.key === 'clientName') {
+        const aValue = a.clientName.toLowerCase()
+        const bValue = b.clientName.toLowerCase()
+        return sortConfig.direction === 'asc' 
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue)
+      }
+      
+      if (sortConfig.key === 'appointmentDate') {
+        const aValue = new Date(a.appointmentDate).getTime()
+        const bValue = new Date(b.appointmentDate).getTime()
+        return sortConfig.direction === 'asc' 
+          ? aValue - bValue
+          : bValue - aValue
+      }
+
+      if (sortConfig.key === 'status') {
+        const aValue = a.status?.toLowerCase() || ''
+        const bValue = b.status?.toLowerCase() || ''
+        return sortConfig.direction === 'asc'
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue)
+      }
+
+      return 0
+    })
+  }, [appointments, sortConfig])
+
+  const handleSort = (key: 'clientName' | 'appointmentDate' | 'status') => {
+    setSortConfig(current => ({
+      key,
+      direction: 
+        current.key === key && current.direction === 'asc' 
+          ? 'desc' 
+          : 'asc'
+    }))
+  }
 
   const handleVerify = async (appointmentId: string) => {
     try {
@@ -80,23 +131,15 @@ export function AppointmentsTable() {
   }
 
   const handleDelete = async (appointment: Appointment) => {
-    if (!appointment.appointmentId || !appointment.clientName) {
-      toast({
-        title: "Error",
-        description: "Invalid appointment data",
-        variant: "destructive",
-      })
-      return
-    }
-
     try {
-      // Clean the ID by removing any known prefixes
-      const cleanId = appointment.appointmentId
-        .replace('APPOINTMENT#', '')
-        .replace('APPT#', '')
+      // Try to get an ID from any available field
+      const possibleId = appointment.id || appointment.appointmentId || appointment.pk?.replace('APPOINTMENT#', '').replace('APPT#', '') || ''
       
-      console.log('Deleting appointment:', { id: cleanId, clientName: appointment.clientName })
-      await deleteAppointment(cleanId, appointment.clientName)
+      // Try to get a client name from any available field
+      const possibleClientName = appointment.clientName || appointment.sk?.replace('CLIENT#', '') || ''
+      
+      console.log('Deleting appointment:', { id: possibleId, clientName: possibleClientName })
+      await deleteAppointment(possibleId, possibleClientName)
       
       toast({
         title: "Appointment deleted",
@@ -245,15 +288,51 @@ export function AppointmentsTable() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gray-50">
-                <TableHead className="font-semibold text-gray-600">Client Name</TableHead>
+                <TableHead 
+                  className="font-semibold text-gray-600 cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('clientName')}
+                >
+                  <div className="flex items-center gap-1">
+                    Client Name
+                    {sortConfig.key === 'clientName' && (
+                      <span className="text-xs">
+                        {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                      </span>
+                    )}
+                  </div>
+                </TableHead>
                 <TableHead className="font-semibold text-gray-600">Contact Info</TableHead>
-                <TableHead className="font-semibold text-gray-600">Appointment</TableHead>
-                <TableHead className="font-semibold text-gray-600">Status</TableHead>
+                <TableHead 
+                  className="font-semibold text-gray-600 cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('appointmentDate')}
+                >
+                  <div className="flex items-center gap-1">
+                    Appointment
+                    {sortConfig.key === 'appointmentDate' && (
+                      <span className="text-xs">
+                        {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                      </span>
+                    )}
+                  </div>
+                </TableHead>
+                <TableHead 
+                  className="font-semibold text-gray-600 cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('status')}
+                >
+                  <div className="flex items-center gap-1">
+                    Status
+                    {sortConfig.key === 'status' && (
+                      <span className="text-xs">
+                        {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                      </span>
+                    )}
+                  </div>
+                </TableHead>
                 <TableHead className="font-semibold text-gray-600">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {appointments.map((appointment) => (
+              {sortedAppointments.map((appointment) => (
                 <TableRow key={`appointment-${appointment.id}-${appointment.clientName}`} className="hover:bg-gray-50">
                   <TableCell className="font-medium text-gray-900">
                     {appointment.clientName}

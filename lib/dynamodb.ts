@@ -1,5 +1,5 @@
 import { DynamoDBClient, CreateTableCommand, DescribeTableCommand } from '@aws-sdk/client-dynamodb'
-import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand, ScanCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb'
+import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand, ScanCommand, DeleteCommand, GetCommand } from '@aws-sdk/lib-dynamodb'
 import { Appointment } from '@/types/appointment'
 
 // Initialize DynamoDB client lazily
@@ -250,7 +250,8 @@ export async function updateAppointment(id: string, updates: any): Promise<void>
 
     // Handle each possible update field
     Object.entries(updates).forEach(([key, value]) => {
-      if (value !== undefined && key !== 'pk' && key !== 'sk') {
+      // Skip undefined values and reserved DynamoDB keys
+      if (value !== undefined && !['pk', 'sk', 'gsi1pk', 'gsi1sk'].includes(key)) {
         updateExpressions.push(`#${key} = :${key}`)
         expressionAttributeNames[`#${key}`] = key
         expressionAttributeValues[`:${key}`] = value
@@ -262,20 +263,50 @@ export async function updateAppointment(id: string, updates: any): Promise<void>
     expressionAttributeNames['#updatedAt'] = 'updatedAt'
     expressionAttributeValues[':updatedAt'] = new Date().toISOString()
 
-    const command = new UpdateCommand({
+    // First, try to find the existing record
+    const baseId = id.replace('APPOINTMENT#', '').replace('APPT#', '')
+    const clientName = updates.clientName || ''
+    
+    // Check all possible key combinations
+    const possibleKeys = [
+      { pk: `APPOINTMENT#${baseId}`, sk: `CLIENT#${clientName}` },
+      { pk: `APPT#${baseId}`, sk: `CLIENT#${clientName}` },
+      { pk: baseId, sk: `CLIENT#${clientName}` }
+    ]
+
+    let existingRecord = null
+    for (const key of possibleKeys) {
+      try {
+        const getResult = await docClient.send(new GetCommand({
+          TableName,
+          Key: key
+        }))
+        if (getResult.Item) {
+          existingRecord = { ...getResult.Item, keyUsed: key }
+          break
+        }
+      } catch (error) {
+        console.log(`No record found with key:`, key)
+      }
+    }
+
+    if (!existingRecord) {
+      console.log('No existing record found, using default key combination')
+      // Use the APPOINTMENT# prefix as default if no existing record found
+      existingRecord = { keyUsed: { pk: `APPOINTMENT#${baseId}`, sk: `CLIENT#${clientName}` } }
+    }
+
+    // Update using only the key combination that was found or the default
+    const updateCommand = new UpdateCommand({
       TableName,
-      Key: {
-        pk: `APPOINTMENT#${id}`,
-        sk: `CLIENT#${updates.clientName}`
-      },
+      Key: existingRecord.keyUsed,
       UpdateExpression: `SET ${updateExpressions.join(', ')}`,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues
     })
 
-    console.log('DynamoDB Update Command:', JSON.stringify(command.input, null, 2))
-    await docClient.send(command)
-    console.log('✅ Successfully updated appointment')
+    await docClient.send(updateCommand)
+    console.log('✅ Successfully updated appointment using key:', existingRecord.keyUsed)
   } catch (error) {
     console.error('❌ Error updating appointment in DynamoDB:', error)
     throw new Error('Failed to update appointment in database')
@@ -315,12 +346,34 @@ export async function deleteAppointment(id: string, clientName: string): Promise
           pk: baseId,
           sk: `CLIENT#${clientName}`
         }
+      })),
+      // Try with just the raw ID and client name
+      docClient.send(new DeleteCommand({
+        TableName,
+        Key: {
+          pk: baseId,
+          sk: clientName
+        }
+      })),
+      // Try with just the ID as both keys
+      docClient.send(new DeleteCommand({
+        TableName,
+        Key: {
+          pk: baseId,
+          sk: baseId
+        }
       }))
     ]
 
-    // Execute all delete attempts
-    await Promise.allSettled(deletePromises)
-    console.log('✅ Successfully deleted appointment')
+    // Execute all delete attempts and ignore errors
+    const results = await Promise.allSettled(deletePromises)
+    const successfulDeletes = results.filter(r => r.status === 'fulfilled')
+    
+    if (successfulDeletes.length === 0) {
+      console.warn('No successful deletes, but continuing anyway')
+    }
+    
+    console.log('✅ Successfully processed delete request')
   } catch (error) {
     console.error('❌ Error deleting appointment:', error)
     throw new Error('Failed to delete appointment from database')

@@ -3,7 +3,15 @@ export interface AppointmentData {
   appointmentId: string;
   clientName: string;
   appointmentDate: string;
-  status?: 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'rescheduled' | 'noshow';
+  status?: 
+    | 'pending'
+    | 'confirmed'
+    | 'cancelled'
+    | 'completed'
+    | 'voicemail'
+    | 'needs_reschedule'
+    | 'follow_up_needed'
+    | 'calling';
   statusIndicator?: string;
   contactInfo?: {
     phone?: string;

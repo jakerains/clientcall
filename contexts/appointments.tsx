@@ -6,7 +6,7 @@ import { Appointment } from '@/types/appointment'
 interface AppointmentsContextType {
   appointments: Appointment[]
   addAppointment: (appointment: Appointment) => Promise<void>
-  updateAppointment: (id: string, updates: Partial<Appointment>) => Promise<void>
+  updateAppointment: (id: string, clientName: string, updates: Partial<Appointment>) => Promise<void>
   deleteAppointment: (id: string, clientName: string) => Promise<void>
   loading: boolean
   error: string | null
@@ -22,6 +22,46 @@ export function AppointmentsProvider({ children }: { children: React.ReactNode }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
+
+  // Set up SSE listener for real-time updates
+  useEffect(() => {
+    const eventSource = new EventSource('/api/appointments/events')
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        console.log('Received SSE update:', data)
+        
+        switch (data.type) {
+          case 'connected':
+            console.log('SSE connection established')
+            break
+          case 'ping':
+            // Ignore ping messages
+            break
+          case 'appointment_update':
+            console.log('Appointment update received:', data)
+            // Refresh appointments immediately when we get a webhook update
+            refreshAppointments()
+            break
+          default:
+            console.log('Unknown SSE message type:', data.type)
+        }
+      } catch (error) {
+        console.error('Error processing SSE update:', error)
+      }
+    }
+
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error)
+      // Don't close on error - let the browser retry
+    }
+
+    return () => {
+      console.log('Cleaning up SSE connection')
+      eventSource.close()
+    }
+  }, [])
 
   // Get the base URL for API calls
   const getApiUrl = (endpoint: string) => {
@@ -87,14 +127,18 @@ export function AppointmentsProvider({ children }: { children: React.ReactNode }
     }
   }
 
-  async function updateAppointment(id: string, updates: Partial<Appointment>) {
+  async function updateAppointment(id: string, clientName: string, updates: Partial<Appointment>) {
     try {
       const response = await fetch(getApiUrl(`/api/appointments/${id}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(updates)
+        body: JSON.stringify({
+          appointmentId: id,
+          clientName,
+          updates
+        })
       })
 
       if (!response.ok) {

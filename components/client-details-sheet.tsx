@@ -11,11 +11,13 @@ import {
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { useAppointments } from "@/contexts/appointments"
+import { useToast } from "@/components/ui/use-toast"
 import { useState, useEffect } from "react"
 import { AppointmentData } from "@/types/appointments"
 
 export function ClientDetailsSheet() {
   const { selectedAppointment, updateAppointment, setSelectedAppointment } = useAppointments()
+  const { toast } = useToast()
   const [formData, setFormData] = useState<Partial<AppointmentData>>({})
 
   useEffect(() => {
@@ -32,13 +34,31 @@ export function ClientDetailsSheet() {
   }
 
   const handleSave = async () => {
-    if (selectedAppointment?.appointmentId) {
-      try {
-        await updateAppointment(selectedAppointment.appointmentId, formData)
-        handleClose()
-      } catch (error) {
-        console.error('Error updating appointment:', error)
-      }
+    if (!selectedAppointment?.id || !formData.clientName) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Missing required data for update. Please ensure all required fields are filled."
+      })
+      return
+    }
+
+    try {
+      console.log('Saving appointment updates:', formData)
+      await updateAppointment(selectedAppointment.id, formData.clientName, formData)
+      console.log('Successfully saved appointment')
+      toast({
+        title: "Success",
+        description: "Appointment updated successfully"
+      })
+      handleClose()
+    } catch (error) {
+      console.error('Error updating appointment:', error)
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to update appointment"
+      })
     }
   }
 
@@ -224,7 +244,11 @@ export function ClientDetailsSheet() {
               <div className="space-y-1">
                 {formData.notes.map((note, index) => (
                   <div key={index} className="text-sm p-2 bg-gray-50 rounded">
-                    {note}
+                    <div className="flex justify-between items-center">
+                      <div className="text-xs text-gray-500">{new Date(note.timestamp).toLocaleString()}</div>
+                      <div className="text-xs px-2 py-0.5 rounded bg-gray-200 capitalize">{note.type}</div>
+                    </div>
+                    <div className="mt-1">{note.content}</div>
                   </div>
                 ))}
               </div>
@@ -234,7 +258,7 @@ export function ClientDetailsSheet() {
           <div className="flex justify-end space-x-2 mt-4">
             <Button 
               variant="outline"
-              onClick={() => setIsOpen(false)}
+              onClick={handleClose}
               className="text-gray-600 hover:text-gray-800"
             >
               Cancel
