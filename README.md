@@ -20,56 +20,55 @@ A Next.js application for managing medical appointments and automated patient co
 
 - **Data Storage & Processing**
   - DynamoDB for persistent storage
-  - Efficient data querying using composite keys
+  - AWS Secrets Manager for secure configuration
   - Real-time data synchronization
   - Amazon Bedrock for AI-powered document processing
   - Secure credential management
 
 ## Prerequisites
 
-- Node.js 18+ and npm/yarn
-- AWS Account with DynamoDB and Bedrock access
+- Node.js 18+
+- pnpm (recommended) or npm
+- AWS Account with:
+  - DynamoDB access
+  - Bedrock access
+  - Secrets Manager access
 - Bland AI API key
-- Environment variables setup
 
-## Environment Variables
+## Configuration
 
-Create a `.env.local` file with the following:
+The application uses AWS Secrets Manager to store configuration. Create a secret named `clientcalljr/env` with the following structure:
 
-```bash
-# AWS Configuration
-AWS_ACCESS_KEY_ID=your_aws_access_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-AWS_REGION=your_aws_region
-DYNAMODB_TABLE_NAME=your_table_name
-
-# Bland AI Configuration
-NEXT_PUBLIC_BLAND_API_KEY=your_bland_ai_key
-
-# Optional: Development webhook URL (default: https://genaijake.io/api/bland-webhook)
-# NEXT_PUBLIC_WEBHOOK_URL=http://localhost:3000/api/bland-webhook
+```json
+{
+  "AWS_ACCESS_KEY_ID": "your_aws_access_key",
+  "AWS_SECRET_ACCESS_KEY": "your_aws_secret_key",
+  "AWS_REGION": "your_aws_region",
+  "DYNAMODB_TABLE_NAME": "your_table_name",
+  "NEXT_PUBLIC_BLAND_API_KEY": "your_bland_ai_key",
+  "NEXT_PUBLIC_BLAND_API": "https://api.bland.ai",
+  "NEXT_PUBLIC_DOCUMENT_PROCESSOR_URL": "your_document_processor_url",
+  "NEXT_PUBLIC_APP_URL": "your_app_url",
+  "NEXT_PUBLIC_WEBHOOK_URL": "your_webhook_url"
+}
 ```
 
 ## Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/jakerains/client-caller.git
-cd client-caller
+git clone https://github.com/jakerains/clientcall.git
+cd clientcall
 ```
 
 2. Install dependencies:
 ```bash
-npm install
-# or
-yarn install
+pnpm install
 ```
 
 3. Run the development server:
 ```bash
-npm run dev
-# or
-yarn dev
+pnpm dev
 ```
 
 4. Open [http://localhost:3000](http://localhost:3000) to view the application
@@ -86,6 +85,7 @@ yarn dev
 ├── lib/                   # Utility functions and services
 │   ├── dynamodb.ts       # DynamoDB operations
 │   ├── blandApi.ts       # Bland AI integration
+│   ├── secretsManager.ts # AWS Secrets Manager integration
 │   └── documentParser.ts  # PDF parsing utilities
 ├── types/                 # TypeScript type definitions
 ├── docs/                  # Project documentation
@@ -102,6 +102,7 @@ yarn dev
 - `GET /api/bland-webhook` - SSE endpoint for call updates
 - `POST /api/bland-webhook` - Webhook endpoint for Bland AI callbacks
 - `POST /api/process-document` - Process and extract data from PDF documents
+- `GET /api/config` - Retrieve public configuration values
 
 ## Database Schema
 
@@ -123,10 +124,12 @@ The repository includes a comprehensive `.gitignore` file that excludes:
 - IDE-specific files
 - Temporary files and logs
 
-### Testing
+### Scripts
 ```bash
-npm run test          # Run all tests
-npm run test-webhook  # Test webhook functionality
+pnpm dev           # Start development server
+pnpm build         # Build for production
+pnpm start         # Start production server
+pnpm lint          # Run linting
 ```
 
 ## Contributing
